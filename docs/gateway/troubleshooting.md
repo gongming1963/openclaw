@@ -33,6 +33,26 @@ See also: [Health checks](/gateway/health) and [Logging](/logging).
 
 ## Common Issues
 
+### "Unauthorized: gateway token mismatch" (Error 1008)
+
+This means the Gateway is running with a configured token (`gateway.auth.token` in `openclaw.json` or `OPENCLAW_GATEWAY_TOKEN`), but the client (Dashboard or CLI) provided a different token (or none).
+
+**Fix:**
+
+1. **Check the configured token on the Gateway host:**
+
+   ```bash
+   # Look for gateway.auth.token
+   cat ~/.openclaw/openclaw.json
+   # Or check env var
+   echo $OPENCLAW_GATEWAY_TOKEN
+   ```
+
+2. **Connect with the correct token:**
+   - **Dashboard:** Open `http://localhost:18789/?token=<YOUR_TOKEN>`
+   - **CLI:** `openclaw gateway status --token <YOUR_TOKEN>`
+   - **Remote:** Ensure your client/runner uses the matching token.
+
 ### No API key found for provider "anthropic"
 
 This means the **agent’s auth store is empty** or missing Anthropic credentials.
