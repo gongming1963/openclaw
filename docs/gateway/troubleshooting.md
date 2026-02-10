@@ -1,15 +1,17 @@
 ---
-summary: "Quick troubleshooting guide for common OpenClaw failures"
+summary: "Deep troubleshooting runbook for gateway, channels, automation, nodes, and browser"
 read_when:
-  - Investigating runtime issues or failures
+  - The troubleshooting hub pointed you here for deeper diagnosis
+  - You need stable symptom based runbook sections with exact commands
 title: "Troubleshooting"
 ---
 
-# Troubleshooting 🔧
+# Gateway troubleshooting
 
-When OpenClaw misbehaves, here's how to fix it.
+This page is the deep runbook.
+Start at [/help/troubleshooting](/help/troubleshooting) if you want the fast triage flow first.
 
-Start with the FAQ’s [First 60 seconds](/help/faq#first-60-seconds-if-somethings-broken) if you just want a quick triage recipe. This page goes deeper on runtime failures and diagnostics.
+## Command ladder
 
 Provider-specific shortcuts: [/channels/troubleshooting](/channels/troubleshooting)
 
@@ -328,460 +330,302 @@ See also: [Models CLI](/cli/models) and [Model providers](/concepts/model-provid
 
 ```bash
 openclaw status
-```
-
-Look for `AllowFrom: ...` in the output.
-
-**Check 2:** For group chats, is mention required?
-
-```bash
-# The message must match mentionPatterns or explicit mentions; defaults live in channel groups/guilds.
-# Multi-agent: `agents.list[].groupChat.mentionPatterns` overrides global patterns.
-grep -n "agents\\|groupChat\\|mentionPatterns\\|channels\\.whatsapp\\.groups\\|channels\\.telegram\\.groups\\|channels\\.imessage\\.groups\\|channels\\.discord\\.guilds" \
-  "${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-```
-
-**Check 3:** Check the logs
-
-```bash
+openclaw gateway status
 openclaw logs --follow
-# or if you want quick filters:
-tail -f "$(ls -t /tmp/openclaw/openclaw-*.log | head -1)" | grep "blocked\\|skip\\|unauthorized"
+openclaw doctor
+openclaw channels status --probe
 ```
 
-### Pairing Code Not Arriving
+Expected healthy signals:
 
-If `dmPolicy` is `pairing`, unknown senders should receive a code and their message is ignored until approved.
+- `openclaw gateway status` shows `Runtime: running` and `RPC probe: ok`.
+- `openclaw doctor` reports no blocking config/service issues.
+- `openclaw channels status --probe` shows connected/ready channels.
 
-**Check 1:** Is a pending request already waiting?
+## No replies
+
+If channels are up but nothing answers, check routing and policy before reconnecting anything.
 
 ```bash
-openclaw pairing list <channel>
-```
-
-Pending DM pairing requests are capped at **3 per channel** by default. If the list is full, new requests won’t generate a code until one is approved or expires.
-
-**Check 2:** Did the request get created but no reply was sent?
-
-```bash
-openclaw logs --follow | grep "pairing request"
-```
-
-**Check 3:** Confirm `dmPolicy` isn’t `open`/`allowlist` for that channel.
-
-### Image + Mention Not Working
-
-Known issue: When you send an image with ONLY a mention (no other text), WhatsApp sometimes doesn't include the mention metadata.
-
-**Workaround:** Add some text with the mention:
-
-- ❌ `@openclaw` + image
-- ✅ `@openclaw check this` + image
-
-### Session Not Resuming
-
-**Check 1:** Is the session file there?
-
-```bash
-ls -la ~/.openclaw/agents/<agentId>/sessions/
-```
-
-**Check 2:** Is the reset window too short?
-
-```json
-{
-  "session": {
-    "reset": {
-      "mode": "daily",
-      "atHour": 4,
-      "idleMinutes": 10080 // 7 days
-    }
-  }
-}
-```
-
-**Check 3:** Did someone send `/new`, `/reset`, or a reset trigger?
-
-### Agent Timing Out
-
-Default timeout is 30 minutes. For long tasks:
-
-```json
-{
-  "reply": {
-    "timeoutSeconds": 3600 // 1 hour
-  }
-}
-```
-
-Or use the `process` tool to background long commands.
-
-### WhatsApp Disconnected
-
-```bash
-# Check local status (creds, sessions, queued events)
 openclaw status
-# Probe the running gateway + channels (WA connect + Telegram + Discord APIs)
+openclaw channels status --probe
+openclaw pairing list <channel>
+openclaw config get channels
+openclaw logs --follow
+```
+
+Look for:
+
+- Pairing pending for DM senders.
+- Group mention gating (`requireMention`, `mentionPatterns`).
+- Channel/group allowlist mismatches.
+
+Common signatures:
+
+- `drop guild message (mention required` → group message ignored until mention.
+- `pairing request` → sender needs approval.
+- `blocked` / `allowlist` → sender/channel was filtered by policy.
+
+Related:
+
+- [/channels/troubleshooting](/channels/troubleshooting)
+- [/channels/pairing](/channels/pairing)
+- [/channels/groups](/channels/groups)
+
+## Dashboard control ui connectivity
+
+When dashboard/control UI will not connect, validate URL, auth mode, and secure context assumptions.
+
+```bash
+openclaw gateway status
+openclaw status
+openclaw logs --follow
+openclaw doctor
+openclaw gateway status --json
+```
+
+Look for:
+
+- Correct probe URL and dashboard URL.
+- Auth mode/token mismatch between client and gateway.
+- HTTP usage where device identity is required.
+
+Common signatures:
+
+- `device identity required` → non-secure context or missing device auth.
+- `unauthorized` / reconnect loop → token/password mismatch.
+- `gateway connect failed:` → wrong host/port/url target.
+
+Related:
+
+- [/web/control-ui](/web/control-ui)
+- [/gateway/authentication](/gateway/authentication)
+- [/gateway/remote](/gateway/remote)
+
+## Gateway service not running
+
+Use this when service is installed but process does not stay up.
+
+```bash
+openclaw gateway status
+openclaw status
+openclaw logs --follow
+openclaw doctor
+openclaw gateway status --deep
+```
+
+Look for:
+
+- `Runtime: stopped` with exit hints.
+- Service config mismatch (`Config (cli)` vs `Config (service)`).
+- Port/listener conflicts.
+
+Common signatures:
+
+- `Gateway start blocked: set gateway.mode=local` → local gateway mode is not enabled.
+- `refusing to bind gateway ... without auth` → non-loopback bind without token/password.
+- `another gateway instance is already listening` / `EADDRINUSE` → port conflict.
+
+Related:
+
+- [/gateway/background-process](/gateway/background-process)
+- [/gateway/configuration](/gateway/configuration)
+- [/gateway/doctor](/gateway/doctor)
+
+## Channel connected messages not flowing
+
+If channel state is connected but message flow is dead, focus on policy, permissions, and channel specific delivery rules.
+
+```bash
+openclaw channels status --probe
+openclaw pairing list <channel>
 openclaw status --deep
-
-# View recent connection events
-openclaw logs --limit 200 | grep "connection\\|disconnect\\|logout"
+openclaw logs --follow
+openclaw config get channels
 ```
 
-**Fix:** Usually reconnects automatically once the Gateway is running. If you’re stuck, restart the Gateway process (however you supervise it), or run it manually with verbose output:
+Look for:
+
+- DM policy (`pairing`, `allowlist`, `open`, `disabled`).
+- Group allowlist and mention requirements.
+- Missing channel API permissions/scopes.
+
+Common signatures:
+
+- `mention required` → message ignored by group mention policy.
+- `pairing` / pending approval traces → sender is not approved.
+- `missing_scope`, `not_in_channel`, `Forbidden`, `401/403` → channel auth/permissions issue.
+
+Related:
+
+- [/channels/troubleshooting](/channels/troubleshooting)
+- [/channels/whatsapp](/channels/whatsapp)
+- [/channels/telegram](/channels/telegram)
+- [/channels/discord](/channels/discord)
+
+## Cron and heartbeat delivery
+
+If cron or heartbeat did not run or did not deliver, verify scheduler state first, then delivery target.
 
 ```bash
-openclaw gateway --verbose
+openclaw cron status
+openclaw cron list
+openclaw cron runs --id <jobId> --limit 20
+openclaw system heartbeat last
+openclaw logs --follow
 ```
 
-If you’re logged out / unlinked:
+Look for:
+
+- Cron enabled and next wake present.
+- Job run history status (`ok`, `skipped`, `error`).
+- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `alerts-disabled`).
+
+Common signatures:
+
+- `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
+- `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
+- `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
+- `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
+
+Related:
+
+- [/automation/troubleshooting](/automation/troubleshooting)
+- [/automation/cron-jobs](/automation/cron-jobs)
+- [/gateway/heartbeat](/gateway/heartbeat)
+
+## Node paired tool fails
+
+If a node is paired but tools fail, isolate foreground, permission, and approval state.
 
 ```bash
-openclaw channels logout
-trash "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/credentials" # if logout can't cleanly remove everything
-openclaw channels login --verbose       # re-scan QR
+openclaw nodes status
+openclaw nodes describe --node <idOrNameOrIp>
+openclaw approvals get --node <idOrNameOrIp>
+openclaw logs --follow
+openclaw status
 ```
 
-### Media Send Failing
+Look for:
 
-**Check 1:** Is the file path valid?
+- Node online with expected capabilities.
+- OS permission grants for camera/mic/location/screen.
+- Exec approvals and allowlist state.
+
+Common signatures:
+
+- `NODE_BACKGROUND_UNAVAILABLE` → node app must be in foreground.
+- `*_PERMISSION_REQUIRED` / `LOCATION_PERMISSION_REQUIRED` → missing OS permission.
+- `SYSTEM_RUN_DENIED: approval required` → exec approval pending.
+- `SYSTEM_RUN_DENIED: allowlist miss` → command blocked by allowlist.
+
+Related:
+
+- [/nodes/troubleshooting](/nodes/troubleshooting)
+- [/nodes/index](/nodes/index)
+- [/tools/exec-approvals](/tools/exec-approvals)
+
+## Browser tool fails
+
+Use this when browser tool actions fail even though the gateway itself is healthy.
 
 ```bash
-ls -la /path/to/your/image.jpg
-```
-
-**Check 2:** Is it too large?
-
-- Images: max 6MB
-- Audio/Video: max 16MB
-- Documents: max 100MB
-
-**Check 3:** Check media logs
-
-```bash
-grep "media\\|fetch\\|download" "$(ls -t /tmp/openclaw/openclaw-*.log | head -1)" | tail -20
-```
-
-### High Memory Usage
-
-OpenClaw keeps conversation history in memory.
-
-**Fix:** Restart periodically or set session limits:
-
-```json
-{
-  "session": {
-    "historyLimit": 100 // Max messages to keep
-  }
-}
-```
-
-## Common troubleshooting
-
-### “Gateway won’t start — configuration invalid”
-
-OpenClaw now refuses to start when the config contains unknown keys, malformed values, or invalid types.
-This is intentional for safety.
-
-Fix it with Doctor:
-
-```bash
+openclaw browser status
+openclaw browser start --browser-profile openclaw
+openclaw browser profiles
+openclaw logs --follow
 openclaw doctor
-openclaw doctor --fix
 ```
 
-Notes:
+Look for:
 
-- `openclaw doctor` reports every invalid entry.
-- `openclaw doctor --fix` applies migrations/repairs and rewrites the config.
-- Diagnostic commands like `openclaw logs`, `openclaw health`, `openclaw status`, `openclaw gateway status`, and `openclaw gateway probe` still run even if the config is invalid.
+- Valid browser executable path.
+- CDP profile reachability.
+- Extension relay tab attachment for `profile="chrome"`.
 
-### “All models failed” — what should I check first?
+Common signatures:
 
-- **Credentials** present for the provider(s) being tried (auth profiles + env vars).
-- **Model routing**: confirm `agents.defaults.model.primary` and fallbacks are models you can access.
-- **Gateway logs** in `/tmp/openclaw/…` for the exact provider error.
-- **Model status**: use `/model status` (chat) or `openclaw models status` (CLI).
+- `Failed to start Chrome CDP on port` → browser process failed to launch.
+- `browser.executablePath not found` → configured path is invalid.
+- `Chrome extension relay is running, but no tab is connected` → extension relay not attached.
+- `Browser attachOnly is enabled ... not reachable` → attach-only profile has no reachable target.
 
-### I’m running on my personal WhatsApp number — why is self-chat weird?
+Related:
 
-Enable self-chat mode and allowlist your own number:
+- [/tools/browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
+- [/tools/chrome-extension](/tools/chrome-extension)
+- [/tools/browser](/tools/browser)
 
-```json5
-{
-  channels: {
-    whatsapp: {
-      selfChatMode: true,
-      dmPolicy: "allowlist",
-      allowFrom: ["+15555550123"],
-    },
-  },
-}
-```
+## If you upgraded and something suddenly broke
 
-See [WhatsApp setup](/channels/whatsapp).
+Most post-upgrade breakage is config drift or stricter defaults now being enforced.
 
-### WhatsApp logged me out. How do I re‑auth?
-
-Run the login command again and scan the QR code:
+### 1) Auth and URL override behavior changed
 
 ```bash
-openclaw channels login
+openclaw gateway status
+openclaw config get gateway.mode
+openclaw config get gateway.remote.url
+openclaw config get gateway.auth.mode
 ```
 
-### Build errors on `main` — what’s the standard fix path?
+What to check:
 
-1. `git pull origin main && pnpm install`
-2. `openclaw doctor`
-3. Check GitHub issues or Discord
-4. Temporary workaround: check out an older commit
+- If `gateway.mode=remote`, CLI calls may be targeting remote while your local service is fine.
+- Explicit `--url` calls do not fall back to stored credentials.
 
-### npm install fails (allow-build-scripts / missing tar or yargs). What now?
+Common signatures:
 
-If you’re running from source, use the repo’s package manager: **pnpm** (preferred).
-The repo declares `packageManager: "pnpm@…"`.
+- `gateway connect failed:` → wrong URL target.
+- `unauthorized` → endpoint reachable but wrong auth.
 
-Typical recovery:
+### 2) Bind and auth guardrails are stricter
 
 ```bash
-git status   # ensure you’re in the repo root
-pnpm install
-pnpm build
+openclaw config get gateway.bind
+openclaw config get gateway.auth.token
+openclaw gateway status
+openclaw logs --follow
+```
+
+What to check:
+
+- Non-loopback binds (`lan`, `tailnet`, `custom`) need auth configured.
+- Old keys like `gateway.token` do not replace `gateway.auth.token`.
+
+Common signatures:
+
+- `refusing to bind gateway ... without auth` → bind+auth mismatch.
+- `RPC probe: failed` while runtime is running → gateway alive but inaccessible with current auth/url.
+
+### 3) Pairing and device identity state changed
+
+```bash
+openclaw devices list
+openclaw pairing list <channel>
+openclaw logs --follow
 openclaw doctor
+```
+
+What to check:
+
+- Pending device approvals for dashboard/nodes.
+- Pending DM pairing approvals after policy or identity changes.
+
+Common signatures:
+
+- `device identity required` → device auth not satisfied.
+- `pairing required` → sender/device must be approved.
+
+If the service config and runtime still disagree after checks, reinstall service metadata from the same profile/state directory:
+
+```bash
+openclaw gateway install --force
 openclaw gateway restart
 ```
 
-Why: pnpm is the configured package manager for this repo.
-
-### How do I switch between git installs and npm installs?
-
-Use the **website installer** and select the install method with a flag. It
-upgrades in place and rewrites the gateway service to point at the new install.
-
-Switch **to git install**:
-
-```bash
-curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
-```
-
-Switch **to npm global**:
-
-```bash
-curl -fsSL https://openclaw.ai/install.sh | bash
-```
-
-Notes:
-
-- The git flow only rebases if the repo is clean. Commit or stash changes first.
-- After switching, run:
-  ```bash
-  openclaw doctor
-  openclaw gateway restart
-  ```
-
-### Telegram block streaming isn’t splitting text between tool calls. Why?
-
-Block streaming only sends **completed text blocks**. Common reasons you see a single message:
-
-- `agents.defaults.blockStreamingDefault` is still `"off"`.
-- `channels.telegram.blockStreaming` is set to `false`.
-- `channels.telegram.streamMode` is `partial` or `block` **and draft streaming is active**
-  (private chat + topics). Draft streaming disables block streaming in that case.
-- Your `minChars` / coalesce settings are too high, so chunks get merged.
-- The model emits one large text block (no mid‑reply flush points).
-
-Fix checklist:
-
-1. Put block streaming settings under `agents.defaults`, not the root.
-2. Set `channels.telegram.streamMode: "off"` if you want real multi‑message block replies.
-3. Use smaller chunk/coalesce thresholds while debugging.
-
-See [Streaming](/concepts/streaming).
-
-### Discord doesn’t reply in my server even with `requireMention: false`. Why?
-
-`requireMention` only controls mention‑gating **after** the channel passes allowlists.
-By default `channels.discord.groupPolicy` is **allowlist**, so guilds must be explicitly enabled.
-If you set `channels.discord.guilds.<guildId>.channels`, only the listed channels are allowed; omit it to allow all channels in the guild.
-
-Fix checklist:
-
-1. Set `channels.discord.groupPolicy: "open"` **or** add a guild allowlist entry (and optionally a channel allowlist).
-2. Use **numeric channel IDs** in `channels.discord.guilds.<guildId>.channels`.
-3. Put `requireMention: false` **under** `channels.discord.guilds` (global or per‑channel).
-   Top‑level `channels.discord.requireMention` is not a supported key.
-4. Ensure the bot has **Message Content Intent** and channel permissions.
-5. Run `openclaw channels status --probe` for audit hints.
-
-Docs: [Discord](/channels/discord), [Channels troubleshooting](/channels/troubleshooting).
-
-### Cloud Code Assist API error: invalid tool schema (400). What now?
-
-This is almost always a **tool schema compatibility** issue. The Cloud Code Assist
-endpoint accepts a strict subset of JSON Schema. OpenClaw scrubs/normalizes tool
-schemas in current `main`, but the fix is not in the last release yet (as of
-January 13, 2026).
-
-Fix checklist:
-
-1. **Update OpenClaw**:
-   - If you can run from source, pull `main` and restart the gateway.
-   - Otherwise, wait for the next release that includes the schema scrubber.
-2. Avoid unsupported keywords like `anyOf/oneOf/allOf`, `patternProperties`,
-   `additionalProperties`, `minLength`, `maxLength`, `format`, etc.
-3. If you define custom tools, keep the top‑level schema as `type: "object"` with
-   `properties` and simple enums.
-
-See [Tools](/tools) and [TypeBox schemas](/concepts/typebox).
-
-## macOS Specific Issues
-
-### App Crashes when Granting Permissions (Speech/Mic)
-
-If the app disappears or shows "Abort trap 6" when you click "Allow" on a privacy prompt:
-
-**Fix 1: Reset TCC Cache**
-
-```bash
-tccutil reset All bot.molt.mac.debug
-```
-
-**Fix 2: Force New Bundle ID**
-If resetting doesn't work, change the `BUNDLE_ID` in [`scripts/package-mac-app.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/package-mac-app.sh) (e.g., add a `.test` suffix) and rebuild. This forces macOS to treat it as a new app.
-
-### Gateway stuck on "Starting..."
-
-The app connects to a local gateway on port `18789`. If it stays stuck:
-
-**Fix 1: Stop the supervisor (preferred)**
-If the gateway is supervised by launchd, killing the PID will just respawn it. Stop the supervisor first:
-
-```bash
-openclaw gateway status
-openclaw gateway stop
-# Or: launchctl bootout gui/$UID/bot.molt.gateway (replace with bot.molt.<profile>; legacy com.openclaw.* still works)
-```
-
-**Fix 2: Port is busy (find the listener)**
-
-```bash
-lsof -nP -iTCP:18789 -sTCP:LISTEN
-```
-
-If it’s an unsupervised process, try a graceful stop first, then escalate:
-
-```bash
-kill -TERM <PID>
-sleep 1
-kill -9 <PID> # last resort
-```
-
-**Fix 3: Check the CLI install**
-Ensure the global `openclaw` CLI is installed and matches the app version:
-
-```bash
-openclaw --version
-npm install -g openclaw@<version>
-```
-
-## Debug Mode
-
-Get verbose logging:
-
-```bash
-# Turn on trace logging in config:
-#   ${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json} -> { logging: { level: "trace" } }
-#
-# Then run verbose commands to mirror debug output to stdout:
-openclaw gateway --verbose
-openclaw channels login --verbose
-```
-
-## Log Locations
-
-| Log                               | Location                                                                                                                                                                                                                                                                                                                    |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Gateway file logs (structured)    | `/tmp/openclaw/openclaw-YYYY-MM-DD.log` (or `logging.file`)                                                                                                                                                                                                                                                                 |
-| Gateway service logs (supervisor) | macOS: `$OPENCLAW_STATE_DIR/logs/gateway.log` + `gateway.err.log` (default: `~/.openclaw/logs/...`; profiles use `~/.openclaw-<profile>/logs/...`)<br />Linux: `journalctl --user -u openclaw-gateway[-<profile>].service -n 200 --no-pager`<br />Windows: `schtasks /Query /TN "OpenClaw Gateway (<profile>)" /V /FO LIST` |
-| Session files                     | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                                                                                                                                                                                                                                                                            |
-| Media cache                       | `$OPENCLAW_STATE_DIR/media/`                                                                                                                                                                                                                                                                                                |
-| Credentials                       | `$OPENCLAW_STATE_DIR/credentials/`                                                                                                                                                                                                                                                                                          |
-
-## Health Check
-
-```bash
-# Supervisor + probe target + config paths
-openclaw gateway status
-# Include system-level scans (legacy/extra services, port listeners)
-openclaw gateway status --deep
-
-# Is the gateway reachable?
-openclaw health --json
-# If it fails, rerun with connection details:
-openclaw health --verbose
-
-# Is something listening on the default port?
-lsof -nP -iTCP:18789 -sTCP:LISTEN
-
-# Recent activity (RPC log tail)
-openclaw logs --follow
-# Fallback if RPC is down
-tail -20 /tmp/openclaw/openclaw-*.log
-```
-
-## Reset Everything
-
-Nuclear option:
-
-```bash
-openclaw gateway stop
-# If you installed a service and want a clean install:
-# openclaw gateway uninstall
-
-trash "${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
-openclaw channels login         # re-pair WhatsApp
-openclaw gateway restart           # or: openclaw gateway
-```
-
-⚠️ This loses all sessions and requires re-pairing WhatsApp.
-
-## Getting Help
-
-1. Check logs first: `/tmp/openclaw/` (default: `openclaw-YYYY-MM-DD.log`, or your configured `logging.file`)
-2. Search existing issues on GitHub
-3. Open a new issue with:
-   - OpenClaw version
-   - Relevant log snippets
-   - Steps to reproduce
-   - Your config (redact secrets!)
-
----
-
-_"Have you tried turning it off and on again?"_ — Every IT person ever
-
-🦞🔧
-
-### Browser Not Starting (Linux)
-
-If you see `"Failed to start Chrome CDP on port 18800"`:
-
-**Most likely cause:** Snap-packaged Chromium on Ubuntu.
-
-**Quick fix:** Install Google Chrome instead:
-
-```bash
-wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
-sudo dpkg -i google-chrome-stable_current_amd64.deb
-```
-
-Then set in config:
-
-```json
-{
-  "browser": {
-    "executablePath": "/usr/bin/google-chrome-stable"
-  }
-}
-```
-
-**Full guide:** See [browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
+Related:
+
+- [/gateway/pairing](/gateway/pairing)
+- [/gateway/authentication](/gateway/authentication)
+- [/gateway/background-process](/gateway/background-process)
