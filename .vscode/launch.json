@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "OpenClaw Gateway (launch)",
+      "type": "node",
+      "request": "launch",
+      "cwd": "${workspaceFolder}",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["--import", "tsx"],
+      "program": "${workspaceFolder}/src/entry.ts",
+      "args": ["gateway", "--bind", "loopback", "--port", "18789"],
+      "env": {
+        "OPENCLAW_NO_RESPAWN": "1",
+        "OPENCLAW_SKIP_CHANNELS": "1",
+        "OPENCLAW_SKIP_CANVAS_HOST": "1"
+      },
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"]
+    }
+  ]
+}
